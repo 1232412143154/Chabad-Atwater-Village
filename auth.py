@@ -54,23 +54,38 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="auth.py", description="Authorize one Gmail account."
     )
-    parser.add_argument("account", help="Short name from accounts.json.")
+    parser.add_argument(
+        "account", help="Short name from accounts.json, or 'all' for every account."
+    )
     args = parser.parse_args(argv)
 
     try:
-        account = valid_account(args.account)
         known = load_accounts()
-        if account not in known:
-            raise Failure(
-                f"Account '{account}' is not listed in accounts.json.",
-                known=known,
-            )
-        result = authorize(account)
+        if args.account == "all":
+            targets = [name for name in known if not token_path(name).exists()]
+            if not targets:
+                emit({"accounts": [], "status": "ok", "note": "every account already has a token"})
+                return
+        else:
+            account = valid_account(args.account)
+            if account not in known:
+                raise Failure(
+                    f"Account '{account}' is not listed in accounts.json.",
+                    known=known,
+                )
+            targets = [account]
+
+        client_config()  # fail before opening a browser if .env is not ready
+
+        results = []
+        for name in targets:
+            print(f"Authorizing {name} - a browser window will open.", file=sys.stderr)
+            results.append(authorize(name))
+            print(f"Token written to {token_path(name)}", file=sys.stderr)
     except Failure as exc:
         die(exc)
 
-    print(f"Token written to {token_path(account)}", file=sys.stderr)
-    emit(result)
+    emit(results[0] if len(results) == 1 and args.account != "all" else {"accounts": results})
 
 
 if __name__ == "__main__":

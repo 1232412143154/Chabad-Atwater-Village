@@ -74,24 +74,59 @@ def load_env() -> dict[str, str]:
     return values
 
 
-def client_config() -> dict:
+def find_client_file() -> Path | None:
+    """Locate a client-secret JSON as downloaded from the Cloud Console."""
+    override = os.environ.get("GOOGLE_CLIENT_SECRETS")
+    if override:
+        candidate = Path(override).expanduser()
+        return candidate if candidate.is_file() else None
+    named = ROOT / "credentials.json"
+    if named.is_file():
+        return named
+    matches = sorted(ROOT.glob("client_secret*.json"))
+    return matches[0] if matches else None
+
+
+def credentials_from_file(path: Path) -> tuple[str, str]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise Failure(f"Could not read {path.name}: {exc}") from exc
+    section = data.get("installed") or data.get("web") or {}
+    client_id = section.get("client_id", "")
+    client_secret = section.get("client_secret", "")
+    if not client_id or not client_secret:
+        raise Failure(
+            f"{path.name} has no client_id/client_secret.",
+            hint="Download the JSON for a Desktop app OAuth client.",
+        )
+    return client_id, client_secret
+
+
+def client_credentials() -> tuple[str, str]:
+    """Prefer .env; otherwise fall back to a downloaded client-secret JSON."""
     env = load_env()
     client_id = env.get("GOOGLE_CLIENT_ID", "")
     client_secret = env.get("GOOGLE_CLIENT_SECRET", "")
-    missing = [
-        name
-        for name, value in (
-            ("GOOGLE_CLIENT_ID", client_id),
-            ("GOOGLE_CLIENT_SECRET", client_secret),
-        )
-        if not value
-    ]
-    if missing:
-        raise Failure(
-            "Missing OAuth client credentials.",
-            missing=missing,
-            hint=f"Add them to {ENV_FILE.name} in the project root.",
-        )
+    if client_id and client_secret:
+        return client_id, client_secret
+
+    client_file = find_client_file()
+    if client_file:
+        return credentials_from_file(client_file)
+
+    raise Failure(
+        "No OAuth client credentials found.",
+        hint=(
+            "Drop the client-secret JSON you downloaded from the Cloud Console "
+            "next to gmail.py (credentials.json or client_secret*.json), or put "
+            "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env."
+        ),
+    )
+
+
+def client_config() -> dict:
+    client_id, client_secret = client_credentials()
     return {
         "installed": {
             "client_id": client_id,
